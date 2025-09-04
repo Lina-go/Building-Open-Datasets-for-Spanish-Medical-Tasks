@@ -3,8 +3,15 @@ anatem_root: data/AnatEM
 format: nersuite-spanish
 auto_split: true
 
-# Modelo / tokenizer
-model_name: dccuchile/bert-base-spanish-wwm-cased
+# Modelos a evaluar (alias -> HF model id)
+models:
+  BERT_Spanish: dccuchile/bert-base-spanish-wwm-cased
+  RoBERTa_Bio: BSC-TeMU/roberta-base-biomedical-es
+  mBERT: bert-base-multilingual-cased
+
+# Para ejecutar un único modelo -> model_name: dccuchile/bert-base-spanish-wwm-cased
+
+# Tokenizer / modelo
 max_length: 256
 
 # Entrenamiento
@@ -13,10 +20,10 @@ batch_size: 16
 lr: 5.0e-5
 warmup_ratio: 0.1
 seed: 42
-run_name: AnatEM_ES_baseline
+run_name: AnatEM_multi
 
 # Logging
 wandb:
   enabled: true
   project: medical-multilabel
-  mode: online           # online | offline | disabled
+  mode: online         # (online, offline, disabled)

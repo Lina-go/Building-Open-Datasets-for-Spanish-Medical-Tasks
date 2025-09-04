@@ -1,7 +1,7 @@
 """
-Entrenamiento NER en AnatEM (ES/EN) con Hugging Face.
+Entrenamiento NER en AnatEM.
 
-Uso con YAML:
+Uso:
 python -m src.scripts.train_ner_anatem --config configs/ner_anatem.yaml
 """
 
@@ -11,6 +11,10 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
+import warnings
+from seqeval.metrics.v1 import UndefinedMetricWarning
+warnings.filterwarnings("ignore", category=UndefinedMetricWarning)
+
 from datasets import Dataset, DatasetDict
 from seqeval.metrics import f1_score, precision_score, recall_score, classification_report
 from transformers import (
@@ -39,25 +43,26 @@ def parse_args_with_yaml():
         with open(known.config, "r", encoding="utf-8") as f:
             cfg = yaml.safe_load(f) or {}
 
-    # Extrae bloque W&B anidado del YAML (si existe)
+    # Bloques anidados
     wandb_block = cfg.get("wandb", {}) or {}
-    # Evita pasar un dict donde se espera un bool
-    flat_cfg = {k: v for k, v in cfg.items() if k != "wandb"}
+    models_block = cfg.get("models", {}) or {}
+
+    flat_cfg = {k: v for k, v in cfg.items() if k not in ("wandb", "models")}
 
     parser = argparse.ArgumentParser(
-        description="Entrenamiento NER en AnatEM.",
+        description="Entrenamiento NER en AnatEM con múltiples modelos.",
         parents=[base]
     )
     # Datos
-    parser.add_argument("--anatem-root", help="Ruta que contiene conll/, nersuite/ o nersuite-spanish/")
+    parser.add_argument("--anatem-root")
     parser.add_argument("--format", choices=["conll", "nersuite", "nersuite-spanish"])
-    parser.add_argument("--auto_split", action="store_true", help="Divide 80/10/10 si no hay train/devel/test")
+    parser.add_argument("--auto_split", action="store_true")
 
-    # Modelo / tokenizer
-    parser.add_argument("--model-name", help="Modelo HF")
+    # Modelo único (si no usas 'models:' en YAML)
+    parser.add_argument("--model-name")
+
+    # Tokenizer / entrenamiento
     parser.add_argument("--max-length", type=int)
-
-    # Entrenamiento
     parser.add_argument("--epochs", type=int)
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--lr", type=float)
@@ -65,20 +70,20 @@ def parse_args_with_yaml():
     parser.add_argument("--seed", type=int)
     parser.add_argument("--run-name")
 
-    # Logging / W&B (CLI puede sobrescribir YAML)
-    parser.add_argument("--wandb", action="store_true", help="Activa W&B si se pasa por CLI")
-    parser.add_argument("--wandb-project", help="W&B project")
-    parser.add_argument("--wandb-entity", help="W&B entity (usuario o equipo)")
-    parser.add_argument("--wandb-mode", help="online | offline | disabled")
+    # Logging / W&B
+    parser.add_argument("--wandb", action="store_true")
+    parser.add_argument("--wandb-project")
+    parser.add_argument("--wandb-entity")
+    parser.add_argument("--wandb-mode")
 
-    # Defaults desde YAML plano
+    # Defaults YAML
     parser.set_defaults(**flat_cfg)
-    # Defaults específicos de W&B desde el bloque anidado
     parser.set_defaults(
         wandb=bool(wandb_block.get("enabled", False)),
         wandb_project=wandb_block.get("project"),
         wandb_entity=wandb_block.get("entity"),
         wandb_mode=wandb_block.get("mode"),
+        models=models_block  # dict {alias: hf_id}
     )
 
     args = parser.parse_args()
@@ -117,7 +122,7 @@ def build_compute_metrics(id2label):
 def main():
     args = parse_args_with_yaml()
 
-    # W&B desde YAML/CLI → exporta env si está habilitado
+    # Config W&B desde YAML/CLI → exporta env si está habilitado
     if args.wandb:
         if args.wandb_project:
             os.environ.setdefault("WANDB_PROJECT", str(args.wandb_project))
@@ -160,110 +165,139 @@ def main():
     id2label = {i: l for l, i in label2id.items()}
     print("Etiquetas:", labels)
 
-    # 3) Dataset HF
+    # 3) Dataset HF (sin tokenizar aún; tokenizaremos por modelo)
     ds = DatasetDict({
         "train": Dataset.from_dict({"tokens": train_tokens, "ner_tags": train_tags}),
         "validation": Dataset.from_dict({"tokens": dev_tokens, "ner_tags": dev_tags}),
         "test": Dataset.from_dict({"tokens": test_tokens, "ner_tags": test_tags}),
     })
 
-    # 4) Tokenizer + alineado
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name, use_fast=True)
-
-    def _map_fn(batch):
-        return tokenize_and_align_labels(batch, tokenizer, label2id, args.max_length)
-
-    tokenized = ds.map(_map_fn, batched=True, remove_columns=["tokens", "ner_tags"])
-
-    # 5) Modelo (safetensors para evitar el gate del CVE en torch.load)
-    model = AutoModelForTokenClassification.from_pretrained(
-        args.model_name,
-        num_labels=len(labels),
-        id2label=id2label,
-        label2id=label2id,
-        use_safetensors=True
-    )
-
-    # 6) Entrenamiento
+    # 4) Directorio raíz de resultados
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir = os.path.join("results", f"ner_experiments_{timestamp}")
-    os.makedirs(out_dir, exist_ok=True)
+    root_out = os.path.join("results", f"ner_experiments_{timestamp}")
+    os.makedirs(root_out, exist_ok=True)
 
-    train_args = TrainingArguments(
-        output_dir=out_dir,
-        learning_rate=args.lr,
-        num_train_epochs=args.epochs,
-        per_device_train_batch_size=args.batch_size,
-        per_device_eval_batch_size=(args.batch_size * 2 if args.batch_size else 16),
-        eval_strategy="epoch",         # usa eval_strategy por compatibilidad
-        save_strategy="epoch",
-        logging_steps=50,
-        save_total_limit=2,
-        lr_scheduler_type="linear",
-        warmup_ratio=args.warmup_ratio,  # si tu versión no lo soporta, cambia por warmup_steps=0
-        weight_decay=0.01,
-        seed=args.seed or 42,
-        report_to=("wandb" if args.wandb else "none"),
-        run_name=(args.run_name or f"AnatEM_{args.format}_{timestamp}"),
-        load_best_model_at_end=True,
-        metric_for_best_model="eval_f1",
-        greater_is_better=True
-    )
+    # 5) Modelos a correr
+    models_dict = getattr(args, "models", {}) or {}
+    runs = []
 
-    data_collator = DataCollatorForTokenClassification(tokenizer)
-    compute_metrics = build_compute_metrics(id2label)
+    if args.model_name:
+        models_to_run = [("CustomModel", args.model_name)]
+    elif isinstance(models_dict, dict) and len(models_dict) > 0:
+        models_to_run = list(models_dict.items())
+    else:
+        # fallback a uno solo si no hay bloque models ni --model-name
+        default_name = args.model_name or "dccuchile/bert-base-spanish-wwm-cased"
+        models_to_run = [("Default", default_name)]
 
-    trainer = Trainer(
-        model=model,
-        args=train_args,
-        train_dataset=tokenized["train"],
-        eval_dataset=tokenized["validation"],
-        tokenizer=tokenizer,
-        data_collator=data_collator,
-        compute_metrics=compute_metrics,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=2)]
-    )
+    # 6) Loop por modelo
+    for alias, hf_id in models_to_run:
+        print(f"\n=== Modelo: {alias} -> {hf_id} ===")
 
-    print("Entrenando...")
-    trainer.train()
+        # Tokenizer + alineado por modelo
+        tokenizer = AutoTokenizer.from_pretrained(hf_id, use_fast=True)
 
-    print("Evaluando en test...")
-    test_metrics = trainer.evaluate(tokenized["test"], metric_key_prefix="test")
-    print(test_metrics)
+        def _map_fn(batch):
+            return tokenize_and_align_labels(batch, tokenizer, label2id, args.max_length)
 
-    # 7) Guardado de artefactos
-    trainer.save_model(out_dir)
-    tokenizer.save_pretrained(out_dir)
-    with open(os.path.join(out_dir, "label2id.json"), "w", encoding="utf-8") as f:
-        json.dump(label2id, f, indent=2, ensure_ascii=False)
+        tokenized = ds.map(_map_fn, batched=True, remove_columns=["tokens", "ner_tags"])
 
-    # Reporte seqeval detallado
-    preds_logits, _, _ = trainer.predict(tokenized["test"])
-    preds = np.argmax(preds_logits, axis=-1)
+        # Modelo (safetensors para evitar el gate del CVE)
+        model = AutoModelForTokenClassification.from_pretrained(
+            hf_id,
+            num_labels=len(labels),
+            id2label=id2label,
+            label2id=label2id,
+            use_safetensors=True
+        )
 
-    true_tags = []
-    pred_tags = []
-    for p_seq, l_seq in zip(preds, tokenized["test"]["labels"]):
-        p_tags, l_tags = [], []
-        for p_i, l_i in zip(p_seq, l_seq):
-            if l_i == -100:
-                continue
-            p_tags.append(id2label[p_i])
-            l_tags.append(id2label[l_i])
-        pred_tags.append(p_tags)
-        true_tags.append(l_tags)
+        out_dir = os.path.join(root_out, alias)
+        os.makedirs(out_dir, exist_ok=True)
 
-    report_txt = classification_report(true_tags, pred_tags, zero_division=0)
-    with open(os.path.join(out_dir, "seqeval_report.txt"), "w", encoding="utf-8") as f:
-        f.write(report_txt)
+        train_args = TrainingArguments(
+            output_dir=out_dir,
+            learning_rate=args.lr,
+            num_train_epochs=args.epochs,
+            per_device_train_batch_size=args.batch_size,
+            per_device_eval_batch_size=(args.batch_size * 2 if args.batch_size else 16),
+            eval_strategy="epoch",    # usa eval_strategy por compatibilidad
+            save_strategy="epoch",
+            logging_steps=50,
+            save_total_limit=2,
+            lr_scheduler_type="linear",
+            warmup_ratio=args.warmup_ratio,  # si tu versión no lo soporta, cambia por warmup_steps=0
+            weight_decay=0.01,
+            seed=args.seed or 42,
+            report_to=("wandb" if args.wandb else "none"),
+            run_name=(args.run_name or f"AnatEM_{alias}_{timestamp}"),
+            load_best_model_at_end=True,
+            metric_for_best_model="eval_f1",
+            greater_is_better=True
+        )
 
-    pd.DataFrame([{
-        "precision": test_metrics.get("test_precision", None),
-        "recall": test_metrics.get("test_recall", None),
-        "f1": test_metrics.get("test_f1", None)
-    }]).to_csv(os.path.join(out_dir, "metrics.csv"), index=False)
+        data_collator = DataCollatorForTokenClassification(tokenizer)
+        compute_metrics = build_compute_metrics(id2label)
 
-    print("Listo. Artefactos guardados en:", out_dir)
+        trainer = Trainer(
+            model=model,
+            args=train_args,
+            train_dataset=tokenized["train"],
+            eval_dataset=tokenized["validation"],
+            tokenizer=tokenizer,
+            data_collator=data_collator,
+            compute_metrics=compute_metrics,
+            callbacks=[EarlyStoppingCallback(early_stopping_patience=2)]
+        )
+
+        print("Entrenando...")
+        trainer.train()
+
+        print("Evaluando en test...")
+        test_metrics = trainer.evaluate(tokenized["test"], metric_key_prefix="test")
+        print(test_metrics)
+
+        # Guardado de artefactos por modelo
+        trainer.save_model(out_dir)
+        tokenizer.save_pretrained(out_dir)
+        with open(os.path.join(out_dir, "label2id.json"), "w", encoding="utf-8") as f:
+            json.dump(label2id, f, indent=2, ensure_ascii=False)
+
+        # Reporte seqeval detallado
+        preds_logits, _, _ = trainer.predict(tokenized["test"])
+        preds = np.argmax(preds_logits, axis=-1)
+
+        true_tags = []
+        pred_tags = []
+        for p_seq, l_seq in zip(preds, tokenized["test"]["labels"]):
+            p_tags, l_tags = [], []
+            for p_i, l_i in zip(p_seq, l_seq):
+                if l_i == -100:
+                    continue
+                p_tags.append(id2label[p_i])
+                l_tags.append(id2label[l_i])
+            pred_tags.append(p_tags)
+            true_tags.append(l_tags)
+
+        report_txt = classification_report(true_tags, pred_tags)
+        with open(os.path.join(out_dir, "seqeval_report.txt"), "w", encoding="utf-8") as f:
+            f.write(report_txt)
+
+        row = {
+            "alias": alias,
+            "model_name": hf_id,
+            "test_precision": test_metrics.get("test_precision"),
+            "test_recall": test_metrics.get("test_recall"),
+            "test_f1": test_metrics.get("test_f1")
+        }
+        runs.append(row)
+
+    # 7) Resumen multi-modelo
+    if runs:
+        df = pd.DataFrame(runs)
+        df.sort_values("test_f1", ascending=False, inplace=True)
+        df.to_csv(os.path.join(root_out, "summary.csv"), index=False)
+        print("\nResumen guardado en:", os.path.join(root_out, "summary.csv"))
+    print("\nListo. Carpeta de resultados:", root_out)
 
 if __name__ == "__main__":
     main()
