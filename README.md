@@ -4,9 +4,9 @@
 
 This repository contains training and evaluation scripts for two medical NLP tasks:
 
-1. **Multi-label text classification of Spanish titles/abstracts**. Inputs use the processed columns title_processed and spanish_abstract_processed, rows with category_Geographicals==1 are excluded, and outputs are written to results/. Encoders are selected via config; Weights & Biases logging is optional.
+1. **Multi-label text classification of Spanish titles/abstracts**. Assigns multiple medical categories to each article based on its title and abstract. The model analyzes the processed text to identify all applicable MeSH terms.
 
-2. **Named Entity Recognition (NER) on AnatEM (Spanish/English)**. Multiple encoders can be run in a single execution through a YAML models: block.
+2. **Named Entity Recognition (NER) on AnatEM (Spanish/English)**. Detects and highlights anatomical entities within medical texts, enabling structured extraction of key terms for downstream analysis. 
 
 Classification datasets and preprocessing follow the resources from [Dataset-Creation](https://github.com/SantiagoM99/Dataset-Creation)
 
