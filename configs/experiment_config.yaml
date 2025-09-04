@@ -1,0 +1,53 @@
+###################################################
+# Experiment Configuration File for Medical Tasks  #
+####################################################
+
+data:
+  base_dir: data
+  files:
+    train: train_multilabel.csv
+    val: val_multilabel.csv
+    test: test_multilabel.csv
+
+text:
+  mode: title_abstract            # (title_abstract, abstract_only, title_only)
+  title_column: title_processed
+  abstract_column: spanish_abstract_processed
+  title_fallback: title
+  abstract_fallback: spanish_abstract
+
+models:
+  BERT_Spanish: dccuchile/bert-base-spanish-wwm-cased
+  RoBERTa_Bio: BSC-TeMU/roberta-base-biomedical-es
+  mBERT: bert-base-multilingual-cased
+
+experiments:
+  cleaning_types:
+    - splits
+    - splits_extra_cleaned
+    - splits_lemmatizing
+    - splits_stemming
+  text_configs:
+    - abstract_only
+    - title_abstract
+
+train:
+  num_epochs: 5
+  batch_size: 32
+  learning_rate: 1.0e-5
+  warmup_steps: 500
+  max_length: 512
+  early_stopping_patience: 3
+  weight_decay: 0.01
+  gradient_checkpointing: true
+  use_fp16_if_possible: true
+  eval_steps: 200
+  save_steps: 200
+
+output:
+  base_dir: results/experiments
+
+wandb:
+  enabled: true            
+  project: medical-multilabel
+  mode: online              # (online, offline, disabled)

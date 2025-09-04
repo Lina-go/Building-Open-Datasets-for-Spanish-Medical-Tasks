@@ -1,0 +1,14 @@
+# GPT testing configuration file
+
+strategies: [zero_shot, few_shot]
+sample_size: 200
+force_batch: true
+batch_threshold: 500
+
+wandb:
+  project: medical-multilabel
+  entity: null
+  mode: online     # (online, offline, disabled)
+
+azure:
+  deployment: gpt-4o-mini
