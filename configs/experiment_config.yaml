@@ -32,7 +32,7 @@ experiments:
     - title_abstract
 
 train:
-  num_epochs: 5
+  num_epochs: 40
   batch_size: 32
   learning_rate: 1.0e-5
   warmup_steps: 500

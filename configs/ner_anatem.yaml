@@ -1,0 +1,22 @@
+# Datos
+anatem_root: data/AnatEM
+format: nersuite-spanish
+auto_split: true
+
+# Modelo / tokenizer
+model_name: dccuchile/bert-base-spanish-wwm-cased
+max_length: 256
+
+# Entrenamiento
+epochs: 5
+batch_size: 16
+lr: 5.0e-5
+warmup_ratio: 0.1
+seed: 42
+run_name: AnatEM_ES_baseline
+
+# Logging
+wandb:
+  enabled: true
+  project: medical-multilabel
+  mode: online           # online | offline | disabled
