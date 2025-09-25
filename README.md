@@ -32,10 +32,10 @@ pip install -r requirements.txt
 
 ```bash
 # Example: Run multi-label classification
-python train_multilabel.py --config configs/multilabel_config.yaml
+python -m src.scripts.train --config configs/experiment_config.yaml
 
 # Example: Run NER task
-python train_ner.py --config configs/ner_config.yaml
+python -m src.scripts.train_ner_anatem --config configs/ner_anatem.yaml
 ```
 
 ## Repository Structure
