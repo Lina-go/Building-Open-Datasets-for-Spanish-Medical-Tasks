@@ -67,6 +67,18 @@ class GPTNERClassifier:
             api_key=key,
             api_version=version
         )
+    
+    def clean_json_content(self, content):
+        """Helper method to clean markdown code blocks from JSON content"""
+        content = content.strip()
+        
+        # Remove markdown code blocks
+        if content.startswith('```json'):
+            content = content.replace('```json', '').replace('```', '').strip()
+        elif content.startswith('```'):
+            content = content.replace('```', '').strip()
+        
+        return content.strip()
 
     def extract_entities(self, text):
         """Extract entities from a single text"""
@@ -85,6 +97,7 @@ class GPTNERClassifier:
             )
             
             content = response.choices[0].message.content.strip()
+            content = self.clean_json_content(content)
             
             # Parse JSON response
             try:
@@ -160,6 +173,7 @@ class GPTNERClassifier:
             for i in range(len(texts)):
                 task_result = results_by_id.get(f"task-{i}", {})
                 content = task_result.get("content", "[]")
+                content = self.clean_json_content(content)
                 
                 try:
                     entities_data = json.loads(content)
