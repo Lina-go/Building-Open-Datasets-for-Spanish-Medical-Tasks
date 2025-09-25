@@ -15,7 +15,7 @@ models:
 max_length: 256
 
 # Entrenamiento
-epochs: 5
+epochs: 20
 batch_size: 16
 lr: 5.0e-5
 warmup_ratio: 0.1

@@ -8,6 +8,7 @@ python -m src.scripts.train_ner_anatem --config configs/ner_anatem.yaml
 import os
 import json
 from datetime import datetime
+import torch
 
 import numpy as np
 import pandas as pd
@@ -27,6 +28,70 @@ from src.utils.ner_data import (
     read_split_dir, read_flat_dir, auto_split,
     build_label_list, tokenize_and_align_labels
 )
+
+
+# ------------------------- Helper functions -------------------------
+def validate_config(args):
+    """Basic configuration validation"""
+    if not os.path.exists(args.anatem_root):
+        raise FileNotFoundError(f"AnatEM root not found: {args.anatem_root}")
+    
+    if args.max_length and args.max_length < 64:
+        print(f"Warning: max_length={args.max_length} seems small for NER")
+
+def analyze_dataset(tokens, tags):
+    """Analyze and print dataset statistics"""
+    from collections import Counter
+    
+    lengths = [len(sent) for sent in tokens]
+    all_tags = [tag for sent in tags for tag in sent]
+    tag_counts = Counter(all_tags)
+    
+    print(f"Dataset: {len(tokens)} sentences")
+    print(f"Avg length: {sum(lengths)/len(lengths):.1f}, max: {max(lengths)}")
+    print(f"Top tags: {dict(list(tag_counts.most_common(5)))}")
+    
+    entities = [tag for tag in all_tags if tag != 'O' and '-' in tag]
+    entity_types = set(tag[2:] for tag in entities)
+    print(f"Entity types: {len(entity_types)}")
+    
+    return max(lengths)
+
+def check_truncation_warning(max_sentence_length, max_length):
+    """Warn if sentences will be truncated"""
+    if max_sentence_length > max_length:
+        print(f"WARNING: Max sentence length ({max_sentence_length}) > max_length ({max_length})")
+        print("Some sentences will be truncated")
+
+def build_training_args(args, alias, timestamp, out_dir, dataset_size):
+    """Create training arguments with dynamic steps"""
+    eval_steps = max(50, dataset_size // (args.batch_size * 4))
+    save_steps = max(100, dataset_size // (args.batch_size * 2))
+    
+    return TrainingArguments(
+        output_dir=out_dir,
+        learning_rate=args.lr,
+        num_train_epochs=args.epochs,
+        per_device_train_batch_size=args.batch_size,
+        per_device_eval_batch_size=args.batch_size * 2,
+        eval_strategy="steps",
+        eval_steps=eval_steps,
+        save_strategy="steps", 
+        save_steps=save_steps,
+        logging_steps=20,
+        save_total_limit=2,
+        lr_scheduler_type="linear",
+        warmup_ratio=args.warmup_ratio,
+        weight_decay=0.01,
+        seed=args.seed or 42,
+        report_to=("wandb" if args.wandb else "none"),
+        run_name=f"AnatEM_{alias}_{timestamp}",
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_f1",
+        greater_is_better=True,
+        max_grad_norm=1.0,
+        fp16=torch.cuda.is_available()
+    )
 
 # ------------------------- YAML opcional + CLI -------------------------
 
@@ -109,10 +174,21 @@ def build_compute_metrics(id2label):
             pred_tags.append(p_tags)
             true_tags.append(l_tags)
 
+        precision = precision_score(true_tags, pred_tags)
+        recall = recall_score(true_tags, pred_tags)
+        f1 = f1_score(true_tags, pred_tags)
+        
+        entity_types = set()
+        for sent in true_tags:
+            for tag in sent:
+                if tag != 'O' and '-' in tag:
+                    entity_types.add(tag[2:])
+
         return {
-            "precision": precision_score(true_tags, pred_tags),
-            "recall": recall_score(true_tags, pred_tags),
-            "f1": f1_score(true_tags, pred_tags)
+            "precision": precision,
+            "recall": recall, 
+            "f1": f1,
+            "num_entity_types": len(entity_types)
         }
 
     return compute_metrics
@@ -121,6 +197,8 @@ def build_compute_metrics(id2label):
 
 def main():
     args = parse_args_with_yaml()
+
+    validate_config(args)
 
     # Config W&B desde YAML/CLI → exporta env si está habilitado
     if args.wandb:
@@ -158,6 +236,10 @@ def main():
             test_tags = all_tags[len(train_tokens)+n_dev:]
 
     print("Oraciones: train={}, dev={}, test={}".format(len(train_tokens), len(dev_tokens), len(test_tokens)))
+
+    print("Data loaded:")
+    max_length_found = analyze_dataset(train_tokens, train_tags)
+    check_truncation_warning(max_length_found, args.max_length)
 
     # 2) Etiquetas
     labels = build_label_list(train_tags, dev_tags, test_tags)
@@ -214,26 +296,7 @@ def main():
         out_dir = os.path.join(root_out, alias)
         os.makedirs(out_dir, exist_ok=True)
 
-        train_args = TrainingArguments(
-            output_dir=out_dir,
-            learning_rate=args.lr,
-            num_train_epochs=args.epochs,
-            per_device_train_batch_size=args.batch_size,
-            per_device_eval_batch_size=(args.batch_size * 2 if args.batch_size else 16),
-            eval_strategy="epoch",    # usa eval_strategy por compatibilidad
-            save_strategy="epoch",
-            logging_steps=50,
-            save_total_limit=2,
-            lr_scheduler_type="linear",
-            warmup_ratio=args.warmup_ratio,  # si tu versión no lo soporta, cambia por warmup_steps=0
-            weight_decay=0.01,
-            seed=args.seed or 42,
-            report_to=("wandb" if args.wandb else "none"),
-            run_name=(args.run_name or f"AnatEM_{alias}_{timestamp}"),
-            load_best_model_at_end=True,
-            metric_for_best_model="eval_f1",
-            greater_is_better=True
-        )
+        train_args = build_training_args(args, alias, timestamp, out_dir, len(tokenized["train"]))
 
         data_collator = DataCollatorForTokenClassification(tokenizer)
         compute_metrics = build_compute_metrics(id2label)

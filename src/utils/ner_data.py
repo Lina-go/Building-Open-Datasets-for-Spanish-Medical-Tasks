@@ -1,26 +1,84 @@
 # Utilidades simples para leer AnatEM y preparar datos de NER (BIO).
-# Mantener el código claro y directo, sin tipos ni manejo de excepciones innecesario.
 
 import os
 import re
 import random
 
+def validate_sentence_alignment(tokens, tags):
+    """Check basic token-tag alignment"""
+    if len(tokens) != len(tags):
+        raise ValueError(f"Sentence count mismatch: {len(tokens)} vs {len(tags)}")
+    
+    for i, (sent_tokens, sent_tags) in enumerate(zip(tokens, tags)):
+        if len(sent_tokens) != len(sent_tags):
+            raise ValueError(f"Sentence {i} length mismatch: {len(sent_tokens)} vs {len(sent_tags)}")
+
+def validate_bio_format(tags, max_errors=5):
+    """Check BIO tag sequence validity"""
+    errors = []
+    for i, sent_tags in enumerate(tags):
+        for j, tag in enumerate(sent_tags):
+            if tag.startswith('I-'):
+                entity_type = tag[2:]
+                if j == 0 or not sent_tags[j-1].endswith(entity_type):
+                    errors.append(f"Invalid I- tag at sentence {i}, position {j}")
+                    if len(errors) >= max_errors:
+                        return errors
+    return errors
+
+def log_data_stats(tokens, tags):
+    """Print basic data statistics"""
+    lengths = [len(sent) for sent in tokens]
+    print(f"Sentences: {len(tokens)}")
+    print(f"Avg length: {sum(lengths)/len(lengths):.1f} tokens")
+    print(f"Max length: {max(lengths)} tokens")
+
+def validate_sentence_alignment(tokens, tags):
+    """Valida que tokens y tags tengan la misma longitud por oración"""
+    if len(tokens) != len(tags):
+        raise ValueError(f"Mismatch: {len(tokens)} oraciones vs {len(tags)} secuencias de tags")
+    
+    for i, (sent_tokens, sent_tags) in enumerate(zip(tokens, tags)):
+        if len(sent_tokens) != len(sent_tags):
+            raise ValueError(f"Oración {i}: {len(sent_tokens)} tokens vs {len(sent_tags)} tags")
+
+def validate_bio_sequences(tags, max_errors=5):
+    """Valida secuencias BIO básicas"""
+    errors = 0
+    for i, sent_tags in enumerate(tags):
+        for j, tag in enumerate(sent_tags):
+            if tag.startswith('I-') and j > 0:
+                entity_type = tag[2:]
+                prev_tag = sent_tags[j-1]
+                if not prev_tag.endswith(entity_type):
+                    print(f"Warning: Secuencia BIO inválida en oración {i}, posición {j}: {tag}")
+                    errors += 1
+                    if errors >= max_errors:
+                        return
+
+def log_data_stats(tokens, tags):
+    """Registra estadísticas básicas de los datos"""
+    lengths = [len(sent) for sent in tokens]
+    all_tags = [tag for sent in tags for tag in sent]
+    from collections import Counter
+    tag_counts = Counter(all_tags)
+    
+    print(f"Oraciones cargadas: {len(tokens)}")
+    print(f"Longitud promedio: {sum(lengths)/len(lengths):.1f} tokens")
+    print(f"Tags más comunes: {dict(list(tag_counts.most_common(5)))}")
+
 def is_bio_tag(s):
     return bool(re.match(r"^(B|I)-", s)) or s == "O"
 
 def read_conll_like_file(path):
-    """
-    Lee archivos con 2 columnas por línea: token y tag (separadas por TAB o espacio).
-    Oraciones separadas por líneas en blanco.
-    Detecta si la primera columna es el tag (y la segunda el token) o viceversa.
-    """
+    """Read CoNLL-style files with basic validation"""
     sentences_tokens = []
     sentences_tags = []
     cur_toks, cur_tags = [], []
 
     with open(path, "r", encoding="utf-8") as f:
-        for raw in f:
-            line = raw.rstrip("\n")
+        for line in f:
+            line = line.rstrip("\n")
             if not line.strip():
                 if cur_toks:
                     sentences_tokens.append(cur_toks)
@@ -28,11 +86,9 @@ def read_conll_like_file(path):
                     cur_toks, cur_tags = [], []
                 continue
 
-            cols = line.split("\t")
+            cols = line.split("\t") if "\t" in line else line.split()
             if len(cols) < 2:
-                cols = line.split()
-                if len(cols) < 2:
-                    continue
+                continue
 
             a, b = cols[0], cols[1]
             if is_bio_tag(a) and not is_bio_tag(b):
@@ -41,9 +97,9 @@ def read_conll_like_file(path):
                 token, tag = a, b
             else:
                 token, tag = a, b
+                if not is_bio_tag(tag):
+                    tag = "O"
 
-            if not is_bio_tag(tag):
-                tag = "O"
             cur_toks.append(token)
             cur_tags.append(tag)
 
@@ -54,17 +110,14 @@ def read_conll_like_file(path):
     return sentences_tokens, sentences_tags
 
 def read_nersuite_file(path):
-    """
-    Lee NERsuite clásico (7 columnas): tag, start, end, token, lemma, pos, chunk.
-    Usamos tag=col0 y token=col3. Oraciones separadas por líneas en blanco.
-    """
+    """Read NERsuite format with basic validation"""
     sentences_tokens = []
     sentences_tags = []
     cur_toks, cur_tags = [], []
 
     with open(path, "r", encoding="utf-8") as f:
-        for raw in f:
-            line = raw.rstrip("\n")
+        for line in f:
+            line = line.rstrip("\n")
             if not line.strip():
                 if cur_toks:
                     sentences_tokens.append(cur_toks)
@@ -113,6 +166,8 @@ def read_split_dir(root, fmt, split_name):
         all_tokens.extend(toks)
         all_tags.extend(tags)
 
+    validate_sentence_alignment(all_tokens, all_tags)
+
     return all_tokens, all_tags
 
 def read_flat_dir(root, fmt):
@@ -131,6 +186,9 @@ def read_flat_dir(root, fmt):
             toks, tags = read_conll_like_file(p)
         all_tokens.extend(toks)
         all_tags.extend(tags)
+    
+    validate_sentence_alignment(all_tokens, all_tags)
+
     return all_tokens, all_tags
 
 def auto_split(tokens, tags, seed=42, ratios=(0.8, 0.1, 0.1)):
