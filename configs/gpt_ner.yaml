@@ -1,0 +1,14 @@
+# GPT NER evaluation configuration
+
+strategies: [zero_shot, few_shot]
+#sample_size: 200
+force_batch: true
+batch_threshold: 100
+
+wandb:
+  project: gpt-ner-evaluation
+  entity: null
+  mode: online     # (online, offline, disabled)
+
+azure:
+  deployment: gpt-4o-mini

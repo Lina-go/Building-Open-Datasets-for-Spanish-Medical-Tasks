@@ -1,0 +1,14 @@
+{
+  "input_text": "The patient showed inflammation in the cardiac muscle and left ventricle.",
+  "strategy": "zero_shot",
+  "entities": [
+    {
+      "entity": "cardiac muscle",
+      "type": "ANATOMY"
+    },
+    {
+      "entity": "left ventricle",
+      "type": "ANATOMY"
+    }
+  ]
+}
