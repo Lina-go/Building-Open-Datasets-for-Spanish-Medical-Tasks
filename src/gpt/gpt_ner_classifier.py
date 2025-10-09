@@ -13,40 +13,58 @@ from src.gpt.azure_batch_tools import (
 )
 
 
-def build_ner_prompt(text, strategy="zero_shot"):
-    """Build prompt for NER task"""
+def build_ner_prompt(text, strategy="zero_shot", entity_types=None):
+    """Build prompt for NER task with clearer instructions"""
     
+    if entity_types is None:
+        entity_types = ["ANATOMY"]
+    
+    # Create examples with ACTUAL entity types from the data
     if strategy == "few_shot":
         examples = """
-Examples:
+EJEMPLOS:
 
-Input: "The patient showed inflammation in the left ventricle and damage to the cardiac muscle."
-Output: [{"entity": "left ventricle", "type": "ANATOMY"}, {"entity": "cardiac muscle", "type": "ANATOMY"}]
+Texto: "El paciente muestra inflamación en el ventrículo izquierdo del corazón"
+Respuesta: [{"entity": "ventrículo izquierdo", "type": "Multi-tissue_structure"}, {"entity": "corazón", "type": "Organ"}]
 
-Input: "Examination revealed abnormal liver function and enlarged spleen."
-Output: [{"entity": "liver", "type": "ANATOMY"}, {"entity": "spleen", "type": "ANATOMY"}]
+Texto: "Se observaron células cancerosas en el tejido hepático"
+Respuesta: [{"entity": "células cancerosas", "type": "Cell"}, {"entity": "tejido hepático", "type": "Tissue"}]
 
-Input: "MRI scan shows lesions in the frontal cortex and hippocampus region."
-Output: [{"entity": "frontal cortex", "type": "ANATOMY"}, {"entity": "hippocampus", "type": "ANATOMY"}]
+Texto: "Análisis del ADN nuclear en nucleolos de células tumorales"
+Respuesta: [{"entity": "nuclear", "type": "Cellular_component"}, {"entity": "nucleolos", "type": "Cellular_component"}, {"entity": "células tumorales", "type": "Cell"}]
 
 """
     else:
         examples = ""
     
-    return f"""You are an expert in anatomical entity recognition for medical texts.
+    return f"""Eres un experto en reconocimiento de entidades anatómicas en textos médicos.
 
-Task: Extract all anatomical entities (body parts, organs, tissues, anatomical structures) from the input text.
+TAREA: Extrae TODAS las menciones de partes del cuerpo, órganos, tejidos, células y estructuras anatómicas del siguiente texto en español.
 
-Rules:
-- Output ONLY a JSON array of objects
-- Each object has: {{"entity": "text span", "type": "ANATOMY"}}
-- Include only anatomical structures, organs, body parts, tissues
-- Use exact text spans from the input
-- If no anatomical entities found, output []
-- Do not include diseases, symptoms, or procedures
+TIPOS VÁLIDOS: {', '.join(entity_types)}
 
-{examples}Input: "{text}"
-Output:"""
+INCLUYE:
+- Órganos (corazón, hígado, cerebro, etc.)
+- Tejidos (tejido muscular, tejido nervioso, etc.)
+- Células (células madre, células cancerosas, neuronas, etc.)
+- Estructuras (ventrículo, núcleo, membrana, etc.)
+- Sustancias corporales (sangre, linfa, etc.)
+- Sistemas (sistema nervioso, sistema circulatorio, etc.)
+
+NO INCLUYAS:
+- Enfermedades (diabetes, cáncer como enfermedad)
+- Procedimientos médicos (cirugía, biopsia)
+- Medicamentos o químicos (insulina, metformina)
+- Síntomas (dolor, fiebre)
+
+FORMATO DE SALIDA:
+- SOLO un array JSON
+- Cada objeto: {{"entity": "texto exacto", "type": "tipo"}}
+- Si no hay entidades: []
+
+{examples}TEXTO: "{text}"
+
+RESPUESTA:"""
 
 
 class GPTNERClassifier:
