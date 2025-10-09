@@ -138,14 +138,16 @@ def test_extraction_quality():
         
         # Criteria for success
         if strategy == "few_shot":
-            if exact_matches < total_true * 0.3:  # Should get at least 30% recall
+            if exact_matches < total_true * 0.4:  # Should get at least 40% recall with broader prompts
                 print(f"\n✗ {strategy} FAILING - Not extracting enough entities")
                 print("  Problem: GPT is not identifying entities correctly")
-                print("  Solution: Improve prompts with more/better examples")
+                print("  Solution: Check if prompt covers all entity types in your data")
                 return False
         else:
-            if exact_matches < total_true * 0.1:  # Zero-shot should get at least 10%
-                print(f"\n✗ {strategy} FAILING - Almost no extraction")
+            if exact_matches < total_true * 0.2:  # Zero-shot should get at least 20% with broader prompts
+                print(f"\n✗ {strategy} FAILING - Not extracting enough entities")
+                print("  Problem: GPT is not identifying entities")
+                print("  Solution: Verify Azure OpenAI deployment and API configuration")
                 return False
     
     print("\n" + "="*80)
@@ -200,12 +202,17 @@ def test_matching_logic():
             if pred_type.lower() == true_type.lower():
                 return true_type
         
-        # Mapping
+        # EXPANDED mapping for all AnatEM types
         type_mapping = {
             'cell': 'Cell', 'cells': 'Cell', 'célula': 'Cell', 'células': 'Cell',
             'tissue': 'Tissue', 'tejido': 'Tissue',
             'organ': 'Organ', 'órgano': 'Organ',
             'component': 'Cellular_component', 'nucleus': 'Cellular_component',
+            'cancer': 'Cancer', 'tumor': 'Cancer', 'cáncer': 'Cancer',
+            'chemical': 'Simple_chemical', 'químico': 'Simple_chemical',
+            'pathway': 'Pathway', 'vía': 'Pathway',
+            'substance': 'Organism_substance', 'sangre': 'Organism_substance',
+            'system': 'Anatomical_system', 'sistema': 'Anatomical_system',
         }
         
         for key, value in type_mapping.items():
@@ -221,6 +228,8 @@ def test_matching_logic():
         # Default
         if 'Cell' in true_entity_types:
             return 'Cell'
+        if 'Cancer' in true_entity_types:
+            return 'Cancer'
         return sorted(true_entity_types)[0] if true_entity_types else pred_type
     
     # Test cases
@@ -263,7 +272,7 @@ def test_matching_logic():
     
     # Test type mapping
     print("\nType Mapping Tests:")
-    true_types = ["Cell", "Tissue", "Organ", "Cellular_component"]
+    true_types = ["Cell", "Tissue", "Organ", "Cellular_component", "Cancer", "Simple_chemical", "Pathway"]
     
     type_tests = [
         ("Cell", "Cell"),
@@ -274,6 +283,13 @@ def test_matching_logic():
         ("Organ", "Organ"),
         ("órgano", "Organ"),
         ("nucleus", "Cellular_component"),
+        ("Cancer", "Cancer"),
+        ("tumor", "Cancer"),
+        ("cáncer", "Cancer"),
+        ("chemical", "Simple_chemical"),
+        ("químico", "Simple_chemical"),
+        ("pathway", "Pathway"),
+        ("vía", "Pathway"),
     ]
     
     for pred, expected in type_tests:

@@ -1,10 +1,6 @@
 """
-GPT NER Classifier - IMPROVED VERSION
-Key improvements:
-- Better prompts with multiple diverse examples
-- Increased max_tokens for longer responses
-- Better system message
-- Pass entity types to prompt for better guidance
+GPT NER Classifier - FIXED VERSION with BROADER scope
+Key fix: Prompt now covers ALL entity types in AnatEM (anatomy, diseases, chemicals, pathways)
 """
 
 import os
@@ -20,7 +16,8 @@ from src.gpt.azure_batch_tools import (
 
 def build_ner_prompt(text, strategy="zero_shot", entity_types=None):
     """
-    Build improved prompt with better examples and instructions
+    Build improved prompt that covers ALL entity types in AnatEM dataset
+    Including: anatomy, diseases (Cancer), chemicals, pathways, substances
     
     Args:
         text: The text to extract entities from
@@ -28,73 +25,95 @@ def build_ner_prompt(text, strategy="zero_shot", entity_types=None):
         entity_types: Optional list of valid entity types from the dataset
     """
     
-    # Get actual entity types from the dataset if provided
+    # Show actual entity types from the dataset
     if entity_types:
         types_str = ", ".join(sorted(entity_types))
         types_instruction = f"\nTIPOS VÁLIDOS: {types_str}"
     else:
-        types_instruction = "\nTIPOS: Cell, Tissue, Organ, Cellular_component, Organism_subdivision"
+        types_instruction = "\nEJEMPLOS DE TIPOS: Cell, Tissue, Organ, Cancer, Pathological_formation, Simple_chemical, Pathway"
     
     if strategy == "few_shot":
-        # Use MULTIPLE diverse examples covering different entity types
+        # Use examples covering the ACTUAL entity types in AnatEM
         examples = """
 EJEMPLOS:
 
-Texto: "Las células madre del hígado se dividen rápidamente."
+Texto: "Las células HeLa son células cancerosas del cuello uterino."
 Respuesta: [
-  {"entity": "células madre", "type": "Cell"},
-  {"entity": "hígado", "type": "Organ"}
+  {"entity": "células HeLa", "type": "Cell"},
+  {"entity": "células cancerosas", "type": "Cell"},
+  {"entity": "cuello uterino", "type": "Organ"}
 ]
 
-Texto: "El tejido muscular del ventrículo izquierdo estaba inflamado."
+Texto: "El tumor primario es un astrocitoma en el lóbulo temporal."
+Respuesta: [
+  {"entity": "tumor", "type": "Cancer"},
+  {"entity": "astrocitoma", "type": "Cancer"},
+  {"entity": "lóbulo temporal", "type": "Multi-tissue_structure"}
+]
+
+Texto: "Las neuronas del cerebro producen dopamina."
+Respuesta: [
+  {"entity": "neuronas", "type": "Cell"},
+  {"entity": "cerebro", "type": "Organ"},
+  {"entity": "dopamina", "type": "Simple_chemical"}
+]
+
+Texto: "El tejido muscular contiene mitocondrias que generan ATP."
 Respuesta: [
   {"entity": "tejido muscular", "type": "Tissue"},
-  {"entity": "ventrículo izquierdo", "type": "Organ"}
+  {"entity": "mitocondrias", "type": "Cellular_component"},
+  {"entity": "ATP", "type": "Simple_chemical"}
 ]
 
-Texto: "Observamos el núcleo celular y la membrana plasmática."
+Texto: "La vía de señalización Wnt regula células madre del sistema nervioso."
 Respuesta: [
-  {"entity": "núcleo celular", "type": "Cellular_component"},
-  {"entity": "membrana plasmática", "type": "Cellular_component"}
+  {"entity": "vía de señalización Wnt", "type": "Pathway"},
+  {"entity": "células madre", "type": "Cell"},
+  {"entity": "sistema nervioso", "type": "Anatomical_system"}
 ]
 
-Texto: "La corteza cerebral presenta neuronas dañadas."
+Texto: "La sangre circula por el sistema cardiovascular llevando oxígeno."
 Respuesta: [
-  {"entity": "corteza cerebral", "type": "Tissue"},
-  {"entity": "neuronas", "type": "Cell"}
-]
-
-Texto: "El sistema nervioso central incluye el cerebro y la médula espinal."
-Respuesta: [
-  {"entity": "sistema nervioso central", "type": "Organism_subdivision"},
-  {"entity": "cerebro", "type": "Organ"},
-  {"entity": "médula espinal", "type": "Organ"}
+  {"entity": "sangre", "type": "Organism_substance"},
+  {"entity": "sistema cardiovascular", "type": "Anatomical_system"},
+  {"entity": "oxígeno", "type": "Simple_chemical"}
 ]
 
 """
     else:
         examples = ""
     
-    # Comprehensive instructions
-    prompt = f"""Eres un experto en reconocimiento de entidades anatómicas en textos médicos en español.
+    # MUCH BROADER instructions to match AnatEM dataset
+    prompt = f"""Eres un experto en extracción de entidades biomédicas de textos científicos en español.
 
-TAREA: Extrae TODAS las menciones de estructuras anatómicas del texto.
+TAREA: Extrae TODAS las entidades biomédicas del texto.
 {types_instruction}
 
-INCLUYE:
-- Órganos: corazón, hígado, pulmón, cerebro
-- Células: neuronas, células madre, linfocitos
-- Tejidos: tejido muscular, tejido nervioso, epitelio
-- Componentes celulares: núcleo, mitocondria, membrana
-- Subdivisiones: lóbulo, ventrículo, corteza, sistema nervioso
+CATEGORÍAS A INCLUIR:
+1. ANATOMÍA:
+   - Células: neuronas, células madre, linfocitos, células HeLa
+   - Tejidos: tejido muscular, tejido nervioso, epitelio
+   - Órganos: corazón, hígado, cerebro, pulmón
+   - Sistemas: sistema nervioso, sistema cardiovascular
+   - Componentes celulares: núcleo, mitocondria, membrana
+   - Estructuras: lóbulo, ventrículo, corteza
 
-NO INCLUYAS:
-- Enfermedades, procedimientos, medicamentos, síntomas
+2. ENFERMEDADES:
+   - Cáncer: tumor, astrocitoma, carcinoma
+   - Formaciones patológicas: lesión, quiste
+
+3. SUSTANCIAS:
+   - Químicos: dopamina, glucosa, ATP, oxígeno
+   - Fluidos: sangre, linfa, líquido cefalorraquídeo
+
+4. PROCESOS:
+   - Vías: vía de señalización, pathway, ruta metabólica
 
 FORMATO DE SALIDA:
 - Array JSON con objetos {{"entity": "texto_exacto", "type": "tipo"}}
-- Usa el texto EXACTO como aparece en el texto original
-- Si no hay entidades anatómicas: []
+- Usa el texto EXACTO como aparece
+- Incluye TODAS las entidades biomédicas relevantes
+- Si no hay entidades: []
 {examples}
 TEXTO A ANALIZAR:
 "{text}"
@@ -106,7 +125,8 @@ RESPUESTA JSON:"""
 
 class GPTNERClassifier:
     """
-    GPT-based NER classifier with improved prompts and error handling
+    GPT-based NER classifier for biomedical entities
+    Handles: anatomy, diseases, chemicals, pathways, substances
     """
     
     def __init__(self, deployment_name, strategy="zero_shot", temperature=0.0,
@@ -118,11 +138,11 @@ class GPTNERClassifier:
         Args:
             deployment_name: Azure OpenAI deployment name
             strategy: "zero_shot" or "few_shot"
-            temperature: Temperature for generation (default 0.0 for deterministic)
-            azure_endpoint: Azure endpoint URL (or from env)
-            api_key: Azure API key (or from env)
-            api_version: API version (default 2024-10-21)
-            entity_types: Optional list of valid entity types
+            temperature: Temperature for generation (default 0.0)
+            azure_endpoint: Azure endpoint URL
+            api_key: Azure API key
+            api_version: API version
+            entity_types: List of valid entity types from dataset
         """
         self.deployment_name = deployment_name
         self.strategy = strategy
@@ -140,18 +160,9 @@ class GPTNERClassifier:
         )
     
     def clean_json_content(self, content):
-        """
-        Clean markdown code blocks from GPT response
-        
-        Args:
-            content: Raw content from GPT
-            
-        Returns:
-            Cleaned JSON string
-        """
+        """Clean markdown code blocks from GPT response"""
         content = content.strip()
         
-        # Remove markdown code blocks
         if content.startswith('```json'):
             content = content.replace('```json', '').replace('```', '').strip()
         elif content.startswith('```'):
@@ -160,15 +171,7 @@ class GPTNERClassifier:
         return content.strip()
 
     def extract_entities(self, text):
-        """
-        Extract entities from a single text
-        
-        Args:
-            text: Text to extract entities from
-            
-        Returns:
-            List of tuples (entity_text, entity_type)
-        """
+        """Extract biomedical entities from a single text"""
         prompt = build_ner_prompt(text, self.strategy, self.entity_types)
         
         try:
@@ -177,7 +180,7 @@ class GPTNERClassifier:
                 messages=[
                     {
                         "role": "system", 
-                        "content": "Eres un experto en extracción de entidades anatómicas de textos médicos en español. Respondes SOLO con JSON válido."
+                        "content": "Eres un experto en extracción de entidades biomédicas (anatomía, enfermedades, químicos, vías) de textos científicos en español. Respondes SOLO con JSON válido."
                     },
                     {
                         "role": "user", 
@@ -186,7 +189,7 @@ class GPTNERClassifier:
                 ],
                 temperature=self.temperature,
                 top_p=1.0,
-                max_tokens=800  # Increased from 500 to allow longer responses
+                max_tokens=1000  # Increased to 1000 for more entities
             )
             
             content = response.choices[0].message.content.strip()
@@ -199,7 +202,7 @@ class GPTNERClassifier:
                     for item in entities_data:
                         if isinstance(item, dict) and "entity" in item:
                             entity_text = item["entity"].strip()
-                            entity_type = item.get("type", "ANATOMY").strip()
+                            entity_type = item.get("type", "BIOMEDICAL").strip()
                             entities.append((entity_text, entity_type))
                     return entities
                 else:
@@ -207,7 +210,7 @@ class GPTNERClassifier:
                     return []
             except json.JSONDecodeError as e:
                 print(f"JSON parse error: {e}")
-                print(f"Content: {content[:200]}")
+                print(f"Content: {content[:300]}")
                 return []
                 
         except Exception as e:
@@ -215,20 +218,10 @@ class GPTNERClassifier:
             return []
 
     def extract_entities_batch(self, texts, work_dir):
-        """
-        Extract entities from multiple texts using batch API
-        
-        Args:
-            texts: List of texts to process
-            work_dir: Working directory for batch files
-            
-        Returns:
-            List of lists of tuples (entity_text, entity_type)
-        """
+        """Extract entities from multiple texts using batch API"""
         os.makedirs(work_dir, exist_ok=True)
         input_jsonl = os.path.join(work_dir, "input.jsonl")
 
-        # Generate batch input file
         lines = []
         for i, text in enumerate(texts):
             prompt = build_ner_prompt(text, self.strategy, self.entity_types)
@@ -237,7 +230,7 @@ class GPTNERClassifier:
                 "messages": [
                     {
                         "role": "system", 
-                        "content": "Eres un experto en extracción de entidades anatómicas de textos médicos en español. Respondes SOLO con JSON válido."
+                        "content": "Eres un experto en extracción de entidades biomédicas (anatomía, enfermedades, químicos, vías) de textos científicos en español. Respondes SOLO con JSON válido."
                     },
                     {
                         "role": "user", 
@@ -246,7 +239,7 @@ class GPTNERClassifier:
                 ],
                 "temperature": self.temperature,
                 "top_p": 1.0,
-                "max_tokens": 800
+                "max_tokens": 1000
             }
             lines.append({
                 "custom_id": f"task-{i}",
@@ -255,21 +248,18 @@ class GPTNERClassifier:
                 "body": body
             })
 
-        # Write input file
         with open(input_jsonl, "w", encoding="utf-8", newline="\n") as f:
             for obj in lines:
                 f.write(json.dumps(obj, ensure_ascii=False))
                 f.write("\n")
 
         try:
-            # Upload and create batch job
             input_file_id = create_file(self.client, input_jsonl)
             batch_id = create_batch_job(self.client, input_file_id)
             
             print(f"Batch job created: {batch_id}")
             print("Waiting for completion...")
             
-            # Wait for completion
             status, output_file_id, error_file_id = poll_batch_until_done(self.client, batch_id)
             
             if status != "completed" or not output_file_id:
@@ -278,11 +268,9 @@ class GPTNERClassifier:
                     print(f"Error file ID: {error_file_id}")
                 return [[] for _ in texts]
             
-            # Download and parse results
             raw_bytes = download_bytes(self.client, output_file_id)
             results_by_id = parse_batch_output(raw_bytes)
             
-            # Extract entities from results
             entities_list = []
             for i in range(len(texts)):
                 task_result = results_by_id.get(f"task-{i}", {})
@@ -296,7 +284,7 @@ class GPTNERClassifier:
                         for item in entities_data:
                             if isinstance(item, dict) and "entity" in item:
                                 entity_text = item["entity"].strip()
-                                entity_type = item.get("type", "ANATOMY").strip()
+                                entity_type = item.get("type", "BIOMEDICAL").strip()
                                 entities.append((entity_text, entity_type))
                         entities_list.append(entities)
                     else:
@@ -312,15 +300,7 @@ class GPTNERClassifier:
 
 
 def extract_entity_types_from_data(tags_list):
-    """
-    Extract all unique entity types from BIO tags
-    
-    Args:
-        tags_list: List of lists of BIO tags
-        
-    Returns:
-        Sorted list of unique entity types
-    """
+    """Extract all unique entity types from BIO tags"""
     entity_types = set()
     for tags in tags_list:
         for tag in tags:

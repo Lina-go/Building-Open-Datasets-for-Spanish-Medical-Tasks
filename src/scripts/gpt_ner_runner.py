@@ -96,11 +96,11 @@ def smart_map_entity_type(pred_type, true_entity_types):
     """
     Intelligently map GPT's predicted types to ground truth types
     
-    Handles:
-    - Direct matches
-    - Spanish/English variations
-    - Partial matches
-    - Sensible defaults
+    Handles ALL AnatEM entity types:
+    - Anatomy (Cell, Tissue, Organ, etc.)
+    - Diseases (Cancer, Pathological_formation)
+    - Chemicals (Simple_chemical)
+    - Pathways, Substances, Systems
     """
     pred_lower = pred_type.lower()
     
@@ -109,7 +109,7 @@ def smart_map_entity_type(pred_type, true_entity_types):
         if pred_type.lower() == true_type.lower():
             return true_type
     
-    # 2. Common mappings (Spanish and English)
+    # 2. EXPANDED mappings for ALL AnatEM entity types
     type_mapping = {
         # Cell types
         'cell': 'Cell',
@@ -134,7 +134,6 @@ def smart_map_entity_type(pred_type, true_entity_types):
         'component': 'Cellular_component',
         'cellular_component': 'Cellular_component',
         'cell_component': 'Cellular_component',
-        'structure': 'Cellular_component',
         'organelle': 'Cellular_component',
         'nucleus': 'Cellular_component',
         'núcleo': 'Cellular_component',
@@ -143,11 +142,51 @@ def smart_map_entity_type(pred_type, true_entity_types):
         'mitochondria': 'Cellular_component',
         'mitocondria': 'Cellular_component',
         
+        # Multi-tissue structures
+        'multi-tissue': 'Multi-tissue_structure',
+        'multi_tissue': 'Multi_tissue_structure',
+        'structure': 'Multi-tissue_structure',
+        
+        # Anatomical systems
+        'system': 'Anatomical_system',
+        'sistema': 'Anatomical_system',
+        'anatomical_system': 'Anatomical_system',
+        
         # Organism subdivisions
         'subdivision': 'Organism_subdivision',
         'region': 'Organism_subdivision',
-        'sistema': 'Organism_subdivision',
-        'system': 'Organism_subdivision',
+        
+        # Cancer and diseases
+        'cancer': 'Cancer',
+        'cáncer': 'Cancer',
+        'tumor': 'Cancer',
+        'carcinoma': 'Cancer',
+        'pathological': 'Pathological_formation',
+        'patológico': 'Pathological_formation',
+        'lesion': 'Pathological_formation',
+        'lesión': 'Pathological_formation',
+        
+        # Chemicals
+        'chemical': 'Simple_chemical',
+        'químico': 'Simple_chemical',
+        'molecule': 'Simple_chemical',
+        'molécula': 'Simple_chemical',
+        'compound': 'Simple_chemical',
+        
+        # Substances
+        'substance': 'Organism_substance',
+        'sustancia': 'Organism_substance',
+        'fluid': 'Organism_substance',
+        'fluido': 'Organism_substance',
+        'blood': 'Organism_substance',
+        'sangre': 'Organism_substance',
+        
+        # Pathways
+        'pathway': 'Pathway',
+        'vía': 'Pathway',
+        'via': 'Pathway',
+        'signaling': 'Pathway',
+        'señalización': 'Pathway',
     }
     
     # 3. Try mapping
@@ -162,15 +201,19 @@ def smart_map_entity_type(pred_type, true_entity_types):
         if pred_lower in true_lower or true_lower in pred_lower:
             return true_type
     
-    # 5. Default: return most common type or first alphabetically
+    # 5. Smart defaults based on what's available
     if true_entity_types:
-        # Prefer Cell as default if available
+        # For anatomical entities
         if 'Cell' in true_entity_types:
             return 'Cell'
         if 'Tissue' in true_entity_types:
             return 'Tissue'
         if 'Organ' in true_entity_types:
             return 'Organ'
+        # For disease entities
+        if 'Cancer' in true_entity_types:
+            return 'Cancer'
+        # Fallback
         return sorted(true_entity_types)[0]
     
     return pred_type
