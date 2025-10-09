@@ -1,5 +1,5 @@
 """
-GPT NER Classifier for anatomical entity recognition
+GPT NER Classifier for anatomical entity recognition - SIMPLIFIED VERSION
 """
 
 import os
@@ -14,67 +14,41 @@ from src.gpt.azure_batch_tools import (
 
 
 def build_ner_prompt(text, strategy="zero_shot", entity_types=None):
-    """Build prompt for NER task with clearer instructions"""
+    """Build SIMPLE prompt that actually works"""
     
-    if entity_types is None:
-        entity_types = ["ANATOMY"]
-    
-    # Create examples with ACTUAL entity types from the data
+    # Simplify: use few broad categories instead of 15 specific types
     if strategy == "few_shot":
         examples = """
-EJEMPLOS:
+Ejemplos:
 
-Texto: "El paciente muestra inflamación en el ventrículo izquierdo del corazón"
-Respuesta: [{"entity": "ventrículo izquierdo", "type": "Multi-tissue_structure"}, {"entity": "corazón", "type": "Organ"}]
+"células del hígado" → [{"entity": "células", "type": "Cell"}, {"entity": "hígado", "type": "Organ"}]
 
-Texto: "Se observaron células cancerosas en el tejido hepático"
-Respuesta: [{"entity": "células cancerosas", "type": "Cell"}, {"entity": "tejido hepático", "type": "Tissue"}]
+"tejido muscular cardíaco" → [{"entity": "tejido muscular cardíaco", "type": "Tissue"}]
 
-Texto: "Análisis del ADN nuclear en nucleolos de células tumorales"
-Respuesta: [{"entity": "nuclear", "type": "Cellular_component"}, {"entity": "nucleolos", "type": "Cellular_component"}, {"entity": "células tumorales", "type": "Cell"}]
+"núcleo celular" → [{"entity": "núcleo celular", "type": "Structure"}]
 
 """
     else:
         examples = ""
     
-    return f"""Eres un experto en reconocimiento de entidades anatómicas en textos médicos.
+    # MUCH SIMPLER PROMPT
+    return f"""Extrae órganos, células, tejidos y estructuras anatómicas del texto médico en español.
 
-TAREA: Extrae TODAS las menciones de partes del cuerpo, órganos, tejidos, células y estructuras anatómicas del siguiente texto en español.
+{examples}Texto: "{text}"
 
-TIPOS VÁLIDOS: {', '.join(entity_types)}
-
-INCLUYE:
-- Órganos (corazón, hígado, cerebro, etc.)
-- Tejidos (tejido muscular, tejido nervioso, etc.)
-- Células (células madre, células cancerosas, neuronas, etc.)
-- Estructuras (ventrículo, núcleo, membrana, etc.)
-- Sustancias corporales (sangre, linfa, etc.)
-- Sistemas (sistema nervioso, sistema circulatorio, etc.)
-
-NO INCLUYAS:
-- Enfermedades (diabetes, cáncer como enfermedad)
-- Procedimientos médicos (cirugía, biopsia)
-- Medicamentos o químicos (insulina, metformina)
-- Síntomas (dolor, fiebre)
-
-FORMATO DE SALIDA:
-- SOLO un array JSON
-- Cada objeto: {{"entity": "texto exacto", "type": "tipo"}}
-- Si no hay entidades: []
-
-{examples}TEXTO: "{text}"
-
-RESPUESTA:"""
+JSON [{{"entity": "...", "type": "..."}}]:"""
 
 
 class GPTNERClassifier:
-    """GPT-based NER classifier for anatomical entities"""
+    """GPT-based NER classifier - simplified version"""
     
     def __init__(self, deployment_name, strategy="zero_shot", temperature=0.0,
-                 azure_endpoint=None, api_key=None, api_version=None):
+                 azure_endpoint=None, api_key=None, api_version=None,
+                 entity_types=None):
         self.deployment_name = deployment_name
         self.strategy = strategy
         self.temperature = float(temperature)
+        self.entity_types = entity_types  # We'll use this for mapping back
 
         endpoint = azure_endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
         key = api_key or os.getenv("AZURE_OPENAI_API_KEY")
@@ -87,10 +61,9 @@ class GPTNERClassifier:
         )
     
     def clean_json_content(self, content):
-        """Helper method to clean markdown code blocks from JSON content"""
+        """Helper method to clean markdown code blocks"""
         content = content.strip()
         
-        # Remove markdown code blocks
         if content.startswith('```json'):
             content = content.replace('```json', '').replace('```', '').strip()
         elif content.startswith('```'):
@@ -100,13 +73,13 @@ class GPTNERClassifier:
 
     def extract_entities(self, text):
         """Extract entities from a single text"""
-        prompt = build_ner_prompt(text, self.strategy)
+        prompt = build_ner_prompt(text, self.strategy, self.entity_types)
         
         try:
             response = self.client.chat.completions.create(
                 model=self.deployment_name,
                 messages=[
-                    {"role": "system", "content": "You are an expert anatomical entity extractor."},
+                    {"role": "system", "content": "Extraes entidades anatómicas de textos médicos en español."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=self.temperature,
@@ -117,11 +90,9 @@ class GPTNERClassifier:
             content = response.choices[0].message.content.strip()
             content = self.clean_json_content(content)
             
-            # Parse JSON response
             try:
                 entities_data = json.loads(content)
                 if isinstance(entities_data, list):
-                    # Convert to (entity_text, entity_type) tuples
                     entities = []
                     for item in entities_data:
                         if isinstance(item, dict) and "entity" in item:
@@ -132,8 +103,7 @@ class GPTNERClassifier:
                 else:
                     return []
             except json.JSONDecodeError:
-                # Try to extract entities from text if JSON parsing fails
-                print(f"JSON parse error. Raw response: {content}")
+                print(f"JSON parse error. Raw: {content[:200]}")
                 return []
                 
         except Exception as e:
@@ -145,14 +115,13 @@ class GPTNERClassifier:
         os.makedirs(work_dir, exist_ok=True)
         input_jsonl = os.path.join(work_dir, "input.jsonl")
 
-        # Generate batch file
         lines = []
         for i, text in enumerate(texts):
-            prompt = build_ner_prompt(text, self.strategy)
+            prompt = build_ner_prompt(text, self.strategy, self.entity_types)
             body = {
                 "model": self.deployment_name,
                 "messages": [
-                    {"role": "system", "content": "You are an expert anatomical entity extractor."},
+                    {"role": "system", "content": "Extraes entidades anatómicas de textos médicos en español."},
                     {"role": "user", "content": prompt}
                 ],
                 "temperature": self.temperature,
@@ -166,13 +135,11 @@ class GPTNERClassifier:
                 "body": body
             })
 
-        # Write JSONL
         with open(input_jsonl, "w", encoding="utf-8", newline="\n") as f:
             for obj in lines:
                 f.write(json.dumps(obj, ensure_ascii=False))
                 f.write("\n")
 
-        # Submit batch
         try:
             input_file_id = create_file(self.client, input_jsonl)
             batch_id = create_batch_job(self.client, input_file_id)
@@ -181,9 +148,8 @@ class GPTNERClassifier:
             
             if status != "completed" or not output_file_id:
                 print(f"Batch failed with status: {status}")
-                return [[] for _ in texts]  # Return empty lists
+                return [[] for _ in texts]
             
-            # Parse results
             raw_bytes = download_bytes(self.client, output_file_id)
             results_by_id = parse_batch_output(raw_bytes)
             
@@ -213,3 +179,17 @@ class GPTNERClassifier:
         except Exception as e:
             print(f"Batch processing error: {e}")
             return [[] for _ in texts]
+
+
+def extract_entity_types_from_data(tags_list):
+    """
+    Extract all unique entity types from BIO tags
+    Add this helper function for compatibility
+    """
+    entity_types = set()
+    for tags in tags_list:
+        for tag in tags:
+            if tag.startswith('B-') or tag.startswith('I-'):
+                entity_type = tag[2:]
+                entity_types.add(entity_type)
+    return sorted(entity_types)
