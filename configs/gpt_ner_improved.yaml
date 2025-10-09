@@ -1,0 +1,34 @@
+# Improved GPT-NER configuration with k-NN retrieval and self-verification
+# Based on: https://arxiv.org/pdf/2304.10428.pdf
+
+# Evaluation strategies
+strategies:
+  - zero_shot                    # Baseline
+  - knn_few_shot                 # k-NN retrieval (main improvement)
+  - knn_few_shot_verified        # k-NN + self-verification (best)
+
+# Sample size for evaluation
+sample_size: 200
+
+# k-NN configuration
+knn:
+  k_examples: 5                  # Number of examples to retrieve
+  model: sentence-transformers/all-MiniLM-L6-v2
+  batch_size: 32
+
+# Self-verification
+verification:
+  enabled: true
+  temperature: 0.0
+
+# W&B logging
+wandb:
+  project: gpt-ner-improved
+  entity: null
+  mode: online                   # (online, offline, disabled)
+
+# Azure OpenAI
+azure:
+  deployment: gpt-4o-mini
+  temperature: 0.0
+  max_tokens: 1000
