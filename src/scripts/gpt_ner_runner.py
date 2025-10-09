@@ -1,5 +1,5 @@
 """
-GPT NER runner
+GPT NER runner - IMPROVED VERSION
 Evalúa GPT-4 en tareas de Named Entity Recognition para AnatEM
 
 Uso:
@@ -16,6 +16,7 @@ import os
 import argparse
 import json
 import time
+import re
 from datetime import datetime
 
 import pandas as pd
@@ -26,30 +27,31 @@ from seqeval.metrics import f1_score, precision_score, recall_score, classificat
 from src.gpt.gpt_ner_classifier import GPTNERClassifier
 from src.utils.ner_data import read_flat_dir, read_split_dir
 
-# Add this after the imports in gpt_ner_runner.py, around line 25
 
-import re
+# ==================== IMPROVED MATCHING FUNCTIONS ====================
 
 def normalize_text(text):
     """Normalize text for fuzzy matching"""
-    # Remove accents, lowercase, remove punctuation
     text = text.lower()
     text = re.sub(r'[^\w\s]', ' ', text)
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
 
-def fuzzy_find_entity(entity_text, tokens):
+def strict_find_entity(entity_text, tokens):
     """
-    Find entity in tokens with fuzzy matching
+    Find entity in tokens with STRICT matching first, then fuzzy
     Returns list of (start_idx, end_idx) for all matches
+    
+    Priority:
+    1. Exact token match
+    2. Case-insensitive exact match
+    3. Fuzzy match with 70% threshold (last resort)
     """
     entity_tokens = entity_text.lower().split()
-    entity_normalized = normalize_text(entity_text)
-    
     matches = []
     
-    # Try exact match first
+    # 1. Try EXACT match first (most common case)
     for i in range(len(tokens) - len(entity_tokens) + 1):
         if [t.lower() for t in tokens[i:i+len(entity_tokens)]] == entity_tokens:
             matches.append((i, i + len(entity_tokens)))
@@ -57,89 +59,175 @@ def fuzzy_find_entity(entity_text, tokens):
     if matches:
         return matches
     
-    # Try fuzzy match - check if entity is substring or superstring
+    # 2. Try case-insensitive exact match
+    entity_normalized = normalize_text(entity_text)
+    
     for i in range(len(tokens)):
-        for j in range(i+1, min(i+10, len(tokens)+1)):
+        for j in range(i+1, min(i+len(entity_tokens)+3, len(tokens)+1)):
             span_text = " ".join(tokens[i:j])
             span_normalized = normalize_text(span_text)
             
-            # Check if entity is in span or span is in entity
-            if (entity_normalized in span_normalized or 
-                span_normalized in entity_normalized):
-                # Must have at least 50% overlap
-                overlap = len(set(entity_normalized.split()) & set(span_normalized.split()))
-                min_len = min(len(entity_normalized.split()), len(span_normalized.split()))
-                if overlap >= min_len * 0.5:
+            # Check if normalized versions match exactly
+            if entity_normalized == span_normalized:
+                matches.append((i, j))
+    
+    if matches:
+        return matches
+    
+    # 3. Only as last resort: fuzzy matching with HIGH threshold (70%)
+    entity_words = set(entity_normalized.split())
+    
+    for i in range(len(tokens)):
+        for j in range(i+1, min(i+len(entity_tokens)+3, len(tokens)+1)):
+            span_text = " ".join(tokens[i:j])
+            span_words = set(normalize_text(span_text).split())
+            
+            # Require at least 70% word overlap (increased from 50%)
+            if entity_words and span_words:
+                overlap = len(entity_words & span_words)
+                min_len = min(len(entity_words), len(span_words))
+                if overlap >= min_len * 0.7:  # 70% threshold
                     matches.append((i, j))
     
     return matches
 
 
-def map_entity_type(pred_type, true_entity_types):
+def smart_map_entity_type(pred_type, true_entity_types):
     """
-    Map GPT's generic types to ground truth specific types
+    Intelligently map GPT's predicted types to ground truth types
+    
+    Handles:
+    - Direct matches
+    - Spanish/English variations
+    - Partial matches
+    - Sensible defaults
     """
     pred_lower = pred_type.lower()
     
-    # Direct match
-    if pred_type in true_entity_types:
-        return pred_type
+    # 1. Direct exact match (case insensitive)
+    for true_type in true_entity_types:
+        if pred_type.lower() == true_type.lower():
+            return true_type
     
-    # Fuzzy matching
+    # 2. Common mappings (Spanish and English)
     type_mapping = {
+        # Cell types
         'cell': 'Cell',
         'cells': 'Cell',
         'célula': 'Cell',
         'células': 'Cell',
+        'cellular': 'Cell',
+        
+        # Tissue types
         'tissue': 'Tissue',
+        'tissues': 'Tissue',
         'tejido': 'Tissue',
+        'tejidos': 'Tissue',
+        
+        # Organ types
         'organ': 'Organ',
+        'organs': 'Organ',
         'órgano': 'Organ',
-        'structure': 'Cellular_component',
+        'órganos': 'Organ',
+        
+        # Cellular components
         'component': 'Cellular_component',
+        'cellular_component': 'Cellular_component',
+        'cell_component': 'Cellular_component',
+        'structure': 'Cellular_component',
+        'organelle': 'Cellular_component',
         'nucleus': 'Cellular_component',
         'núcleo': 'Cellular_component',
+        'membrane': 'Cellular_component',
+        'membrana': 'Cellular_component',
+        'mitochondria': 'Cellular_component',
+        'mitocondria': 'Cellular_component',
+        
+        # Organism subdivisions
+        'subdivision': 'Organism_subdivision',
+        'region': 'Organism_subdivision',
+        'sistema': 'Organism_subdivision',
+        'system': 'Organism_subdivision',
     }
     
-    # Try mapping
+    # 3. Try mapping
     for key, value in type_mapping.items():
         if key in pred_lower and value in true_entity_types:
             return value
     
-    # Default: return most common type in true_entity_types
+    # 4. Partial match on true types
+    for true_type in true_entity_types:
+        true_lower = true_type.lower()
+        # Check if pred is substring of true or vice versa
+        if pred_lower in true_lower or true_lower in pred_lower:
+            return true_type
+    
+    # 5. Default: return most common type or first alphabetically
     if true_entity_types:
-        # Return Cell as default if available
+        # Prefer Cell as default if available
         if 'Cell' in true_entity_types:
             return 'Cell'
+        if 'Tissue' in true_entity_types:
+            return 'Tissue'
+        if 'Organ' in true_entity_types:
+            return 'Organ'
         return sorted(true_entity_types)[0]
     
     return pred_type
 
 
 def entities_to_bio_tags_improved(sentence, entities, tokens, true_entity_types):
-    """Convert entities back to BIO format with fuzzy matching"""
+    """
+    Convert predicted entities back to BIO format with improved matching
+    
+    Features:
+    - Conflict resolution (no double-assignment)
+    - Smart type mapping
+    - Strict matching priority
+    """
     tags = ['O'] * len(tokens)
     
+    # Track which tokens have been assigned to avoid conflicts
+    assigned = [False] * len(tokens)
+    
     for entity_text, entity_type in entities:
-        # Map the type
-        mapped_type = map_entity_type(entity_type, true_entity_types)
+        # Map the type to ground truth types
+        mapped_type = smart_map_entity_type(entity_type, true_entity_types)
         
         # Find all possible matches
-        matches = fuzzy_find_entity(entity_text, tokens)
+        matches = strict_find_entity(entity_text, tokens)
         
-        # Use first match
-        if matches:
-            start_idx, end_idx = matches[0]
+        if not matches:
+            continue
+        
+        # Use first non-conflicting match
+        for start_idx, end_idx in matches:
+            # Check if any tokens in this span are already assigned
+            if any(assigned[start_idx:end_idx]):
+                continue
+            
+            # Assign tags
             tags[start_idx] = f'B-{mapped_type}'
             for i in range(start_idx + 1, end_idx):
                 if i < len(tokens):
                     tags[i] = f'I-{mapped_type}'
+            
+            # Mark as assigned
+            for i in range(start_idx, end_idx):
+                if i < len(tokens):
+                    assigned[i] = True
+            
+            break  # Use first valid match only
     
     return tags
+
+
+# ==================== ORIGINAL HELPER FUNCTIONS ====================
 
 def load_yaml(path):
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
+
 
 def load_test_data(anatem_root, format_type):
     """Load test data from AnatEM"""
@@ -154,6 +242,7 @@ def load_test_data(anatem_root, format_type):
         test_tags = all_tags[-n_test:]
     
     return test_tokens, test_tags
+
 
 def convert_to_sentences(tokens_list, tags_list):
     """Convert token/tag lists to sentence strings with true entities"""
@@ -190,26 +279,12 @@ def convert_to_sentences(tokens_list, tags_list):
     
     return sentences, true_entities_list
 
-def entities_to_bio_tags(sentence, entities, tokens):
-    """Convert entities back to BIO format for evaluation"""
-    tags = ['O'] * len(tokens)
-    
-    for entity_text, entity_type in entities:
-        entity_tokens = entity_text.split()
-        
-        # Find entity in tokens
-        for start_idx in range(len(tokens) - len(entity_tokens) + 1):
-            if tokens[start_idx:start_idx + len(entity_tokens)] == entity_tokens:
-                tags[start_idx] = f'B-{entity_type}'
-                for i in range(1, len(entity_tokens)):
-                    if start_idx + i < len(tokens):
-                        tags[start_idx + i] = f'I-{entity_type}'
-                break
-    
-    return tags
 
 def evaluate_ner_predictions(true_entities_list, pred_entities_list, tokens_list):
-    """Convert predictions to BIO format and compute metrics"""
+    """
+    Convert predictions to BIO format and compute metrics
+    WITH DIAGNOSTIC OUTPUT to help debug
+    """
     
     # Get all true entity types for mapping
     all_true_types = set()
@@ -217,20 +292,54 @@ def evaluate_ner_predictions(true_entities_list, pred_entities_list, tokens_list
         for _, etype in true_entities:
             all_true_types.add(etype)
     
+    print(f"\nFound {len(all_true_types)} unique entity types: {sorted(all_true_types)}")
+    
     true_tags_list = []
     pred_tags_list = []
+    
+    # Track statistics for diagnostics
+    total_pred = 0
+    total_true = 0
+    matched = 0
     
     for true_entities, pred_entities, tokens in zip(true_entities_list, pred_entities_list, tokens_list):
         sentence = " ".join(tokens)
         
-        # Use old function for true tags (they're already correct)
-        true_tags = entities_to_bio_tags(sentence, true_entities, tokens)
+        # For true tags: use simple exact matching (they should always work)
+        true_tags = ['O'] * len(tokens)
+        for entity_text, entity_type in true_entities:
+            entity_tokens = entity_text.split()
+            for i in range(len(tokens) - len(entity_tokens) + 1):
+                if [t.lower() for t in tokens[i:i+len(entity_tokens)]] == [e.lower() for e in entity_tokens]:
+                    true_tags[i] = f'B-{entity_type}'
+                    for j in range(1, len(entity_tokens)):
+                        if i+j < len(tokens):
+                            true_tags[i+j] = f'I-{entity_type}'
+                    break
         
-        # Use improved function for predicted tags
+        # For predicted tags: use improved matching
         pred_tags = entities_to_bio_tags_improved(sentence, pred_entities, tokens, all_true_types)
         
         true_tags_list.append(true_tags)
         pred_tags_list.append(pred_tags)
+        
+        # Count for diagnostics
+        total_true += len(true_entities)
+        total_pred += len(pred_entities)
+        # Simple overlap check for diagnostics
+        pred_entities_text = {e[0].lower() for e in pred_entities}
+        true_entities_text = {e[0].lower() for e in true_entities}
+        matched += len(pred_entities_text & true_entities_text)
+    
+    # Print diagnostics
+    print(f"\nDiagnostics:")
+    print(f"  Total true entities: {total_true}")
+    print(f"  Total predicted entities: {total_pred}")
+    print(f"  Exact text matches: {matched}")
+    if total_true > 0:
+        print(f"  Rough recall: {matched/total_true:.2%}")
+    if total_pred > 0:
+        print(f"  Rough precision: {matched/total_pred:.2%}")
     
     if not true_tags_list:
         return {"precision": 0.0, "recall": 0.0, "f1": 0.0}
@@ -240,6 +349,9 @@ def evaluate_ner_predictions(true_entities_list, pred_entities_list, tokens_list
         "recall": recall_score(true_tags_list, pred_tags_list),
         "f1": f1_score(true_tags_list, pred_tags_list)
     }
+
+
+# ==================== MAIN EVALUATION FUNCTION ====================
 
 def run_gpt_ner_evaluation(config_path, anatem_root, format_type, strategies, 
                           sample_size, force_batch, batch_threshold,
@@ -281,6 +393,11 @@ def run_gpt_ner_evaluation(config_path, anatem_root, format_type, strategies,
     # Convert to sentences and extract true entities
     sentences, true_entities_list = convert_to_sentences(test_tokens, test_tags)
     
+    # Get entity types from data
+    from src.gpt.gpt_ner_classifier import extract_entity_types_from_data
+    entity_types = extract_entity_types_from_data(test_tags)
+    print(f"Entity types in dataset: {entity_types}")
+    
     # Output directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_root = os.path.join("results", f"gpt_ner_evaluation_{timestamp}")
@@ -308,22 +425,27 @@ def run_gpt_ner_evaluation(config_path, anatem_root, format_type, strategies,
             }
         )
         
-        # Initialize GPT NER classifier
+        # Initialize GPT NER classifier with entity types
         deployment = deployment_override or os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
         classifier = GPTNERClassifier(
             deployment_name=deployment,
             strategy=strategy,
-            temperature=0.0
+            temperature=0.0,
+            entity_types=entity_types  # Pass entity types
         )
         
         # Run evaluation
         start_time = time.time()
         try:
             if force_batch and len(sentences) >= batch_threshold:
+                print(f"Using batch processing for {len(sentences)} samples...")
                 pred_entities_list = classifier.extract_entities_batch(sentences, work_dir=out_dir)
             else:
+                print(f"Using online processing for {len(sentences)} samples...")
                 pred_entities_list = []
-                for sentence in sentences:
+                for i, sentence in enumerate(sentences):
+                    if i % 10 == 0:
+                        print(f"  Processing {i+1}/{len(sentences)}...")
                     entities = classifier.extract_entities(sentence)
                     pred_entities_list.append(entities)
                     time.sleep(0.1)  # Rate limiting
@@ -350,7 +472,8 @@ def run_gpt_ner_evaluation(config_path, anatem_root, format_type, strategies,
             }
             all_results.append(result)
             
-            print(f"F1: {metrics.get('f1', 0):.4f}, Time: {elapsed:.1f}s")
+            print(f"\nResults: F1={metrics.get('f1', 0):.4f}, Precision={metrics.get('precision', 0):.4f}, Recall={metrics.get('recall', 0):.4f}")
+            print(f"Time: {elapsed:.1f}s")
             
             # Save detailed results
             if out_dir:
@@ -376,6 +499,8 @@ def run_gpt_ner_evaluation(config_path, anatem_root, format_type, strategies,
         
         except Exception as e:
             print(f"Error in strategy {strategy}: {e}")
+            import traceback
+            traceback.print_exc()
             
         wandb.finish()
     
@@ -405,11 +530,16 @@ def run_gpt_ner_evaluation(config_path, anatem_root, format_type, strategies,
         df = pd.DataFrame(rows)
         df.to_csv(os.path.join(summary_dir, "gpt_ner_summary.csv"), index=False)
         
-        print(f"\nResults saved to: {out_root}")
+        print(f"\n{'='*80}")
+        print(f"Results saved to: {out_root}")
+        print(f"{'='*80}")
         print("\nSummary:")
         print(df.to_string(index=False))
     else:
         print("No successful evaluations")
+
+
+# ==================== MAIN ENTRY POINT ====================
 
 def main():
     parser = argparse.ArgumentParser(description="GPT NER evaluation runner")
@@ -440,6 +570,7 @@ def main():
         wandb_mode=args.wandb_mode,
         deployment_override=args.deployment
     )
+
 
 if __name__ == "__main__":
     main()

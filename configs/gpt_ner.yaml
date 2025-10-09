@@ -1,7 +1,11 @@
-# GPT NER evaluation configuration
+# GPT NER evaluation configuration - FIXED VERSION
 
 strategies: [zero_shot, few_shot]
-#sample_size: 200
+
+# IMPORTANT: Use proper sample size (not commented out!)
+sample_size: 200  # Use 200 samples for meaningful evaluation
+
+# Use batch processing for efficiency
 force_batch: true
 batch_threshold: 100
 
