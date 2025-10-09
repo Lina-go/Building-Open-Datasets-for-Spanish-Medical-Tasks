@@ -1,12 +1,14 @@
 """
 k-NN retrieval for GPT-NER using sentence embeddings (SimCSE approach)
 Inspired by: https://arxiv.org/pdf/2304.10428.pdf
+FIXED: Multi-GPU support
 """
 
 import os
 import json
 import numpy as np
 import faiss
+import torch
 from typing import List, Tuple, Dict
 from tqdm import tqdm
 
@@ -17,17 +19,32 @@ class KNNRetriever:
     Following GPT-NER paper's approach with SimCSE
     """
     
-    def __init__(self, index_path: str = None):
+    def __init__(self, index_path: str = None, device: str = None):
         """
         Initialize retriever
         
         Args:
             index_path: Path to saved FAISS index (optional)
+            device: GPU device to use (e.g., 'cuda:1', 'cuda:2', 'cpu')
+                   If None, uses CUDA_VISIBLE_DEVICES or cuda:0
         """
         self.index = None
         self.train_sentences = []
         self.train_entities = []
         self.embeddings = None
+        
+        # Determine device
+        if device is None:
+            # Check CUDA_VISIBLE_DEVICES
+            visible_devices = os.getenv('CUDA_VISIBLE_DEVICES', '0')
+            if torch.cuda.is_available():
+                # Use first visible device
+                device = f'cuda:{visible_devices.split(",")[0]}'
+            else:
+                device = 'cpu'
+        
+        self.device = device
+        print(f"KNNRetriever using device: {self.device}")
         
         if index_path and os.path.exists(index_path):
             self.load_index(index_path)
@@ -49,6 +66,7 @@ class KNNRetriever:
         from sentence_transformers import SentenceTransformer
         
         print(f"Building k-NN index with {len(train_tokens)} examples...")
+        print(f"Using device: {self.device}")
         
         # Store training data
         self.train_sentences = [" ".join(tokens) for tokens in train_tokens]
@@ -59,25 +77,31 @@ class KNNRetriever:
             entities = self._extract_entities_from_bio(tokens, tags)
             self.train_entities.append(entities)
         
-        # Encode sentences
+        # Encode sentences with specified device
         print(f"Loading model: {model_name}")
-        model = SentenceTransformer(model_name)
+        model = SentenceTransformer(model_name, device=self.device)
         
         print("Encoding sentences...")
         self.embeddings = model.encode(
             self.train_sentences,
             batch_size=batch_size,
             show_progress_bar=True,
-            normalize_embeddings=True  # L2 normalize for cosine similarity
+            normalize_embeddings=True,
+            device=self.device  # Explicit device
         )
         
         # Build FAISS index
         print("Building FAISS index...")
         dimension = self.embeddings.shape[1]
-        self.index = faiss.IndexFlatIP(dimension)  # Inner product = cosine similarity for normalized vectors
+        self.index = faiss.IndexFlatIP(dimension)
         self.index.add(self.embeddings.astype(np.float32))
         
         print(f"✓ Index built with {self.index.ntotal} examples")
+        
+        # Clean up GPU memory
+        del model
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     
     def retrieve_examples(self, 
                          query_sentence: str,
@@ -99,11 +123,13 @@ class KNNRetriever:
         
         from sentence_transformers import SentenceTransformer
         
-        # Encode query
-        model = SentenceTransformer(model_name)
+        # CRITICAL FIX: Use CPU to avoid GPU memory issues during inference
+        # The model is small and CPU encoding is fast enough
+        model = SentenceTransformer(model_name, device='cpu')
         query_embedding = model.encode(
             [query_sentence],
-            normalize_embeddings=True
+            normalize_embeddings=True,
+            device='cpu'
         )
         
         # Search
@@ -117,6 +143,9 @@ class KNNRetriever:
                 'entities': self.train_entities[idx],
                 'score': float(score)
             })
+        
+        # Clean up
+        del model
         
         return results
     
@@ -156,6 +185,7 @@ class KNNRetriever:
         metadata = {
             'train_sentences': self.train_sentences,
             'train_entities': self.train_entities,
+            'device': self.device
         }
         with open(os.path.join(save_dir, "metadata.json"), "w", encoding="utf-8") as f:
             json.dump(metadata, f, ensure_ascii=False, indent=2)
@@ -180,47 +210,3 @@ class KNNRetriever:
         self.embeddings = np.load(os.path.join(index_dir, "embeddings.npy"))
         
         print(f"✓ Index loaded from {index_dir} ({self.index.ntotal} examples)")
-
-
-def build_entity_level_index(train_tokens: List[List[str]], 
-                             train_tags: List[List[str]],
-                             model_name: str = "sentence-transformers/all-MiniLM-L6-v2") -> Dict:
-    """
-    Build entity-level k-NN index (more advanced approach from GPT-NER paper)
-    Groups examples by entity type for better retrieval
-    
-    Returns:
-        Dict mapping entity types to KNNRetriever instances
-    """
-    from collections import defaultdict
-    
-    # Group by entity type
-    type_to_examples = defaultdict(list)
-    
-    for tokens, tags in zip(train_tokens, train_tags):
-        # Get entity types in this sentence
-        entity_types = set()
-        for tag in tags:
-            if tag.startswith('B-') or tag.startswith('I-'):
-                entity_types.add(tag[2:])
-        
-        # Add to each entity type
-        for etype in entity_types:
-            type_to_examples[etype].append((tokens, tags))
-    
-    # Build index per type
-    retrievers = {}
-    for etype, examples in type_to_examples.items():
-        if len(examples) < 5:  # Skip types with too few examples
-            continue
-        
-        print(f"\nBuilding index for entity type: {etype} ({len(examples)} examples)")
-        
-        tokens_list = [ex[0] for ex in examples]
-        tags_list = [ex[1] for ex in examples]
-        
-        retriever = KNNRetriever()
-        retriever.build_index(tokens_list, tags_list, model_name=model_name)
-        retrievers[etype] = retriever
-    
-    return retrievers
