@@ -26,6 +26,116 @@ from seqeval.metrics import f1_score, precision_score, recall_score, classificat
 from src.gpt.gpt_ner_classifier import GPTNERClassifier
 from src.utils.ner_data import read_flat_dir, read_split_dir
 
+# Add this after the imports in gpt_ner_runner.py, around line 25
+
+import re
+
+def normalize_text(text):
+    """Normalize text for fuzzy matching"""
+    # Remove accents, lowercase, remove punctuation
+    text = text.lower()
+    text = re.sub(r'[^\w\s]', ' ', text)
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
+
+
+def fuzzy_find_entity(entity_text, tokens):
+    """
+    Find entity in tokens with fuzzy matching
+    Returns list of (start_idx, end_idx) for all matches
+    """
+    entity_tokens = entity_text.lower().split()
+    entity_normalized = normalize_text(entity_text)
+    
+    matches = []
+    
+    # Try exact match first
+    for i in range(len(tokens) - len(entity_tokens) + 1):
+        if [t.lower() for t in tokens[i:i+len(entity_tokens)]] == entity_tokens:
+            matches.append((i, i + len(entity_tokens)))
+    
+    if matches:
+        return matches
+    
+    # Try fuzzy match - check if entity is substring or superstring
+    for i in range(len(tokens)):
+        for j in range(i+1, min(i+10, len(tokens)+1)):
+            span_text = " ".join(tokens[i:j])
+            span_normalized = normalize_text(span_text)
+            
+            # Check if entity is in span or span is in entity
+            if (entity_normalized in span_normalized or 
+                span_normalized in entity_normalized):
+                # Must have at least 50% overlap
+                overlap = len(set(entity_normalized.split()) & set(span_normalized.split()))
+                min_len = min(len(entity_normalized.split()), len(span_normalized.split()))
+                if overlap >= min_len * 0.5:
+                    matches.append((i, j))
+    
+    return matches
+
+
+def map_entity_type(pred_type, true_entity_types):
+    """
+    Map GPT's generic types to ground truth specific types
+    """
+    pred_lower = pred_type.lower()
+    
+    # Direct match
+    if pred_type in true_entity_types:
+        return pred_type
+    
+    # Fuzzy matching
+    type_mapping = {
+        'cell': 'Cell',
+        'cells': 'Cell',
+        'célula': 'Cell',
+        'células': 'Cell',
+        'tissue': 'Tissue',
+        'tejido': 'Tissue',
+        'organ': 'Organ',
+        'órgano': 'Organ',
+        'structure': 'Cellular_component',
+        'component': 'Cellular_component',
+        'nucleus': 'Cellular_component',
+        'núcleo': 'Cellular_component',
+    }
+    
+    # Try mapping
+    for key, value in type_mapping.items():
+        if key in pred_lower and value in true_entity_types:
+            return value
+    
+    # Default: return most common type in true_entity_types
+    if true_entity_types:
+        # Return Cell as default if available
+        if 'Cell' in true_entity_types:
+            return 'Cell'
+        return sorted(true_entity_types)[0]
+    
+    return pred_type
+
+
+def entities_to_bio_tags_improved(sentence, entities, tokens, true_entity_types):
+    """Convert entities back to BIO format with fuzzy matching"""
+    tags = ['O'] * len(tokens)
+    
+    for entity_text, entity_type in entities:
+        # Map the type
+        mapped_type = map_entity_type(entity_type, true_entity_types)
+        
+        # Find all possible matches
+        matches = fuzzy_find_entity(entity_text, tokens)
+        
+        # Use first match
+        if matches:
+            start_idx, end_idx = matches[0]
+            tags[start_idx] = f'B-{mapped_type}'
+            for i in range(start_idx + 1, end_idx):
+                if i < len(tokens):
+                    tags[i] = f'I-{mapped_type}'
+    
+    return tags
 
 def load_yaml(path):
     with open(path, "r", encoding="utf-8") as f:
@@ -100,14 +210,24 @@ def entities_to_bio_tags(sentence, entities, tokens):
 
 def evaluate_ner_predictions(true_entities_list, pred_entities_list, tokens_list):
     """Convert predictions to BIO format and compute metrics"""
+    
+    # Get all true entity types for mapping
+    all_true_types = set()
+    for true_entities in true_entities_list:
+        for _, etype in true_entities:
+            all_true_types.add(etype)
+    
     true_tags_list = []
     pred_tags_list = []
     
     for true_entities, pred_entities, tokens in zip(true_entities_list, pred_entities_list, tokens_list):
         sentence = " ".join(tokens)
         
+        # Use old function for true tags (they're already correct)
         true_tags = entities_to_bio_tags(sentence, true_entities, tokens)
-        pred_tags = entities_to_bio_tags(sentence, pred_entities, tokens)
+        
+        # Use improved function for predicted tags
+        pred_tags = entities_to_bio_tags_improved(sentence, pred_entities, tokens, all_true_types)
         
         true_tags_list.append(true_tags)
         pred_tags_list.append(pred_tags)

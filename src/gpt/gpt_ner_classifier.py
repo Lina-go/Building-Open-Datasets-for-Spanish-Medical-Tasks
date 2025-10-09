@@ -1,5 +1,5 @@
 """
-GPT NER Classifier for anatomical entity recognition - SIMPLIFIED VERSION
+GPT NER Classifier - FINAL VERSION with v3 prompt that actually works
 """
 
 import os
@@ -14,33 +14,27 @@ from src.gpt.azure_batch_tools import (
 
 
 def build_ner_prompt(text, strategy="zero_shot", entity_types=None):
-    """Build SIMPLE prompt that actually works"""
+    """Build prompt using v3 style that worked best in debug"""
     
-    # Simplify: use few broad categories instead of 15 specific types
     if strategy == "few_shot":
-        examples = """
-Ejemplos:
-
+        # Use the EXACT examples that worked in debug test
+        examples = """Ejemplos:
 "células del hígado" → [{"entity": "células", "type": "Cell"}, {"entity": "hígado", "type": "Organ"}]
-
-"tejido muscular cardíaco" → [{"entity": "tejido muscular cardíaco", "type": "Tissue"}]
-
-"núcleo celular" → [{"entity": "núcleo celular", "type": "Structure"}]
 
 """
     else:
         examples = ""
     
-    # MUCH SIMPLER PROMPT
-    return f"""Extrae órganos, células, tejidos y estructuras anatómicas del texto médico en español.
+    # v3 style: Simple with examples
+    return f"""Extrae entidades anatómicas del texto médico.
 
 {examples}Texto: "{text}"
 
-JSON [{{"entity": "...", "type": "..."}}]:"""
+JSON:"""
 
 
 class GPTNERClassifier:
-    """GPT-based NER classifier - simplified version"""
+    """GPT-based NER classifier using v3 prompt style"""
     
     def __init__(self, deployment_name, strategy="zero_shot", temperature=0.0,
                  azure_endpoint=None, api_key=None, api_version=None,
@@ -48,7 +42,7 @@ class GPTNERClassifier:
         self.deployment_name = deployment_name
         self.strategy = strategy
         self.temperature = float(temperature)
-        self.entity_types = entity_types  # We'll use this for mapping back
+        self.entity_types = entity_types
 
         endpoint = azure_endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
         key = api_key or os.getenv("AZURE_OPENAI_API_KEY")
@@ -61,7 +55,7 @@ class GPTNERClassifier:
         )
     
     def clean_json_content(self, content):
-        """Helper method to clean markdown code blocks"""
+        """Clean markdown code blocks"""
         content = content.strip()
         
         if content.startswith('```json'):
@@ -103,7 +97,6 @@ class GPTNERClassifier:
                 else:
                     return []
             except json.JSONDecodeError:
-                print(f"JSON parse error. Raw: {content[:200]}")
                 return []
                 
         except Exception as e:
@@ -182,10 +175,7 @@ class GPTNERClassifier:
 
 
 def extract_entity_types_from_data(tags_list):
-    """
-    Extract all unique entity types from BIO tags
-    Add this helper function for compatibility
-    """
+    """Extract all unique entity types from BIO tags"""
     entity_types = set()
     for tags in tags_list:
         for tag in tags:
